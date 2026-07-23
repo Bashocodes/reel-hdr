@@ -68,6 +68,9 @@ class VideoProbe:
     dv_bl_signal_compatibility_id: int | None = None
     has_dolby_vision_rpu: bool = False
     stream_tags: tuple[tuple[str, str], ...] = ()
+    audio_codec_name: str | None = None
+    audio_sample_rate: int | None = None
+    audio_channels: int | None = None
 
     @property
     def resolution(self) -> tuple[int, int] | None:
@@ -166,6 +169,15 @@ def parse_probe_json(payload: Mapping[str, Any], *, path: str | Path) -> VideoPr
     if video_stream is None:
         raise ProbeError("ffprobe found no video stream")
 
+    audio_stream = next(
+        (
+            stream
+            for stream in streams
+            if isinstance(stream, Mapping) and stream.get("codec_type") == "audio"
+        ),
+        None,
+    )
+
     format_data = payload.get("format")
     if not isinstance(format_data, Mapping):
         format_data = {}
@@ -215,10 +227,7 @@ def parse_probe_json(payload: Mapping[str, Any], *, path: str | Path) -> VideoPr
         ),
         bit_depth=_parse_bit_depth(video_stream),
         duration=_parse_duration(video_stream, format_data),
-        has_audio=any(
-            isinstance(stream, Mapping) and stream.get("codec_type") == "audio"
-            for stream in streams
-        ),
+        has_audio=audio_stream is not None,
         pix_fmt=_optional_string(video_stream.get("pix_fmt")),
         color_range=_optional_string(video_stream.get("color_range")),
         color_space=_optional_string(video_stream.get("color_space")),
@@ -229,6 +238,19 @@ def parse_probe_json(payload: Mapping[str, Any], *, path: str | Path) -> VideoPr
         dv_bl_signal_compatibility_id=dv_compatibility,
         has_dolby_vision_rpu=has_rpu,
         stream_tags=normalized_tags,
+        audio_codec_name=(
+            _optional_string(audio_stream.get("codec_name")) if audio_stream is not None else None
+        ),
+        audio_sample_rate=(
+            _optional_positive_int(audio_stream.get("sample_rate"))
+            if audio_stream is not None
+            else None
+        ),
+        audio_channels=(
+            _optional_positive_int(audio_stream.get("channels"))
+            if audio_stream is not None
+            else None
+        ),
     )
 
 

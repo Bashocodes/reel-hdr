@@ -1,8 +1,10 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from reelhdr import cli
 from reelhdr.pipeline import PlanError
 from reelhdr.tools import TOOL_SPECS, ToolStatus
+from reelhdr.verify import CheckStatus, VerifyCheck, VerifyReport
 
 
 def test_doctor_prints_detection_report_and_exits_zero(monkeypatch, capsys) -> None:
@@ -24,9 +26,58 @@ def test_doctor_prints_detection_report_and_exits_zero(monkeypatch, capsys) -> N
     assert "[ok] MP4Box: /test-bin/MP4Box" in output
 
 
-def test_verify_remains_an_explicit_stub(capsys) -> None:
-    assert cli.main(["verify"]) == 0
-    assert capsys.readouterr().out.strip() == "coming in the next phase"
+def _report(*, failing: bool = False) -> VerifyReport:
+    return VerifyReport(
+        path=Path("delivery.mp4"),
+        checks=(
+            VerifyCheck(
+                check_id="video.codec",
+                value_found="h264" if failing else "hevc",
+                expectation="hevc",
+                status=CheckStatus.FAIL if failing else CheckStatus.OK,
+                explanation="test finding",
+            ),
+        ),
+    )
+
+
+def test_verify_json_passes_audio_expectations_and_exits_zero(
+    monkeypatch,
+    capsys,
+) -> None:
+    observed = {}
+
+    def fake_verify(path, *, expectations):
+        observed["path"] = path
+        observed["expectations"] = expectations
+        return _report()
+
+    monkeypatch.setattr(cli, "verify_file", fake_verify)
+
+    assert (
+        cli.main(
+            [
+                "verify",
+                "delivery.mp4",
+                "--json",
+                "--expect-audio",
+                "aac",
+            ]
+        )
+        == 0
+    )
+
+    assert observed["path"] == Path("delivery.mp4")
+    assert observed["expectations"].expect_audio is True
+    assert observed["expectations"].audio_codec == "aac"
+    assert '"verdict": "pass"' in capsys.readouterr().out
+
+
+def test_verify_human_report_exits_one_on_failures(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "verify_file", lambda *_args, **_kwargs: _report(failing=True))
+
+    assert cli.main(["verify", "delivery.mp4"]) == 1
+    assert "VERDICT: FAIL" in capsys.readouterr().out
 
 
 def test_convert_dry_run_probes_and_prints_plan(monkeypatch, capsys) -> None:
@@ -80,3 +131,28 @@ def test_convert_reports_plan_errors_without_traceback(monkeypatch, capsys) -> N
 
     assert cli.main(["convert", "input.mov", "-o", "out.mp4"]) == 2
     assert capsys.readouterr().err.strip() == "error: bad input"
+
+
+def test_convert_runs_verification_after_publishing(monkeypatch, capsys) -> None:
+    source = SimpleNamespace(has_audio=True, audio_codec_name="aac")
+    monkeypatch.setattr(cli, "probe_video", lambda _path: source)
+    monkeypatch.setattr(cli, "resolve_toolchain", lambda: object())
+    monkeypatch.setattr(cli, "build_conversion_plan", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli, "execute_conversion", lambda *_args, **_kwargs: Path("out.mp4"))
+    observed = {}
+
+    def fake_verify(path, *, expectations):
+        observed["path"] = path
+        observed["expectations"] = expectations
+        return _report()
+
+    monkeypatch.setattr(cli, "verify_file", fake_verify)
+
+    assert cli.main(["convert", "input.mov", "-o", "out.mp4"]) == 0
+
+    output = capsys.readouterr().out
+    assert "wrote out.mp4" in output
+    assert "VERDICT: PASS" in output
+    assert observed["path"] == Path("out.mp4")
+    assert observed["expectations"].expect_audio is True
+    assert observed["expectations"].audio_codec == "aac"

@@ -52,6 +52,9 @@ def test_normalizes_geometry_timing_tags_and_audio() -> None:
     assert probe.bit_depth == 8
     assert probe.duration == pytest.approx(1.001)
     assert probe.has_audio is True
+    assert probe.audio_codec_name == "aac"
+    assert probe.audio_sample_rate == 48000
+    assert probe.audio_channels == 2
     assert probe.pix_fmt == "yuv420p"
     assert probe.color_range == "tv"
     assert probe.color_space == "bt709"
@@ -71,6 +74,9 @@ def test_normalizes_hdr_and_dolby_vision_evidence() -> None:
     assert hlg.bit_depth == 10
     assert hlg.frame_count == 50
     assert hlg.has_audio is False
+    assert hlg.audio_codec_name is None
+    assert hlg.audio_sample_rate is None
+    assert hlg.audio_channels is None
     assert pq.bit_depth == 10  # Inferred from yuv420p10le.
     assert pq.fps == Fraction(24000, 1001)
     assert dolby.dv_profile == 8
@@ -111,6 +117,35 @@ def test_optional_fields_remain_unknown_and_invalid_rates_are_ignored() -> None:
     assert probe.bit_depth is None
     assert probe.duration is None
     assert probe.has_audio is False
+    assert probe.audio_codec_name is None
+    assert probe.audio_sample_rate is None
+    assert probe.audio_channels is None
+
+
+def test_first_audio_stream_is_normalized_and_invalid_values_are_unknown() -> None:
+    payload = _fixture("ffprobe_sdr.json")
+    payload["streams"][1].update(
+        {
+            "codec_name": "  aac  ",
+            "sample_rate": "not-a-rate",
+            "channels": 0,
+        }
+    )
+    payload["streams"].append(
+        {
+            "codec_type": "audio",
+            "codec_name": "flac",
+            "sample_rate": "96000",
+            "channels": 6,
+        }
+    )
+
+    probe = parse_probe_json(payload, path="input.mp4")
+
+    assert probe.has_audio is True
+    assert probe.audio_codec_name == "aac"
+    assert probe.audio_sample_rate is None
+    assert probe.audio_channels is None
 
 
 def test_counted_frames_take_precedence_over_container_estimate() -> None:

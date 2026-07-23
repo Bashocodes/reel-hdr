@@ -8,6 +8,7 @@ import pytest
 
 from reelhdr.pipeline import build_conversion_plan, execute_conversion, resolve_toolchain
 from reelhdr.probe import SourceClass, probe_video
+from reelhdr.verify import VerifyExpectations, verify_file
 
 _REQUIRED_TOOLS = ("ffmpeg", "ffprobe", "dovi_tool", "MP4Box")
 
@@ -128,3 +129,9 @@ def test_one_second_synthetic_clip_converts_to_hevc_hlg_dv84(
     assert result.color_transfer == "arib-std-b67"
     assert result.color_primaries == "bt2020"
     assert result.color_space == "bt2020nc"
+
+    report = verify_file(
+        output_path,
+        expectations=VerifyExpectations(expect_audio=True, audio_codec="aac"),
+    )
+    assert report.fail_count == 0

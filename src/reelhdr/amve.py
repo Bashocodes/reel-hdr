@@ -21,6 +21,7 @@ _MAX_DEPTH: Final = 12
 _UINT32_MAX: Final = (1 << 32) - 1
 _UINT64_MAX: Final = (1 << 64) - 1
 _HEVC_SAMPLE_ENTRIES: Final = frozenset({b"hvc1", b"hev1", b"dvh1", b"dvhe"})
+_DOLBY_VISION_CONFIG_BOXES: Final = frozenset({b"dvcC", b"dvvC"})
 _VISUAL_SAMPLE_ENTRY_PREFIX_SIZE: Final = 78
 
 
@@ -89,6 +90,57 @@ class _Target:
     sample_entry: _Box
     ancestors: tuple[_Box, ...]
     children: tuple[_Box, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TopLevelBoxEvidence:
+    """Position and declared size of one validated top-level ISO-BMFF box."""
+
+    box_type: str
+    offset: int
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class DolbyVisionConfigEvidence:
+    """Dolby Vision decoder-configuration evidence from a visual sample entry.
+
+    ``payload`` is the exact box body, excluding its ISO-BMFF size and type
+    header. Profile and base-layer compatibility remain ``None`` when the
+    validated box is too short to contain their respective bit fields.
+    """
+
+    box_type: str
+    offset: int
+    payload: bytes
+    profile: int | None
+    bl_signal_compatibility_id: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class IsoBmffEvidence:
+    """Read-only container facts used by the conformance verifier."""
+
+    top_level_boxes: tuple[TopLevelBoxEvidence, ...]
+    moov_offset: int | None
+    mdat_offset: int | None
+    first_video_sample_entry_type: str
+    dolby_vision_config: DolbyVisionConfigEvidence | None
+    amve_present: bool
+
+    @property
+    def top_level_box_order(self) -> tuple[str, ...]:
+        """Return top-level four-character codes in physical file order."""
+
+        return tuple(box.box_type for box in self.top_level_boxes)
+
+    @property
+    def fast_start(self) -> bool | None:
+        """Whether ``moov`` precedes ``mdat``, or ``None`` if either is absent."""
+
+        if self.moov_offset is None or self.mdat_offset is None:
+            return None
+        return self.moov_offset < self.mdat_offset
 
 
 def _u32(data: memoryview, offset: int) -> int:
@@ -269,6 +321,133 @@ def _locate_target(
     return video_targets[video_track_index], moov, tracks
 
 
+def read_iso_bmff_evidence(
+    mp4: bytes | bytearray | memoryview,
+    *,
+    video_track_index: int = 0,
+) -> IsoBmffEvidence:
+    """Read bounded conformance evidence without modifying the input.
+
+    Traversal follows the validated ISO-BMFF hierarchy:
+
+    ``moov/trak/mdia/minf/stbl/stsd/<visual sample entry>``.
+
+    Dolby Vision configuration and ambient-viewing boxes are accepted only as
+    children of the selected visual sample entry. Byte strings that merely
+    resemble box names elsewhere in the file are ignored. Parsing is capped at
+    twelve levels and 10,000 boxes. Malformed or truncated input raises the
+    controlled :class:`IsoBmffError`; missing optional metadata is represented
+    by ``None`` or ``False`` in the returned evidence.
+    """
+
+    if video_track_index < 0:
+        raise ValueError("video_track_index must be non-negative")
+
+    source = memoryview(mp4).cast("B")
+    try:
+        return _read_iso_bmff_evidence_from_view(
+            source,
+            video_track_index=video_track_index,
+        )
+    finally:
+        # Releasing explicitly matters when the caller supplied a read-only
+        # mmap: even a controlled parse exception must not leave an exported
+        # buffer that prevents the mmap from closing.
+        source.release()
+
+
+def _read_iso_bmff_evidence_from_view(
+    source: memoryview,
+    *,
+    video_track_index: int,
+) -> IsoBmffEvidence:
+    budget = _ParseBudget()
+    top_level = _parse_boxes(source, 0, len(source), depth=0, budget=budget)
+    moov = _only(top_level, b"moov", "file")
+    top_level_evidence = tuple(
+        TopLevelBoxEvidence(
+            box_type=box.type.decode("ascii", errors="replace"),
+            offset=box.start,
+            size=box.size,
+        )
+        for box in top_level
+    )
+
+    moov_children = _children(source, moov, depth=1, budget=budget)
+    tracks = tuple(box for box in moov_children if box.type == b"trak")
+    video_entries: list[tuple[_Box, tuple[_Box, ...]]] = []
+    for trak in tracks:
+        trak_children = _children(source, trak, depth=2, budget=budget)
+        mdia = _only(trak_children, b"mdia", "'trak'")
+        mdia_children = _children(source, mdia, depth=3, budget=budget)
+        hdlr = _only(mdia_children, b"hdlr", "'mdia'")
+        if _handler_type(source, hdlr) != b"vide":
+            continue
+
+        minf = _only(mdia_children, b"minf", "'mdia'")
+        minf_children = _children(source, minf, depth=4, budget=budget)
+        stbl = _only(minf_children, b"stbl", "'minf'")
+        stbl_children = _children(source, stbl, depth=5, budget=budget)
+        stsd = _only(stbl_children, b"stsd", "'stbl'")
+        entries = _sample_entries(source, stsd, depth=6, budget=budget)
+        if not entries:
+            raise IsoBmffError("video track has no visual sample entry")
+
+        sample_entry = entries[0]
+        sample_children = _children(
+            source,
+            sample_entry,
+            depth=7,
+            budget=budget,
+            prefix_size=_VISUAL_SAMPLE_ENTRY_PREFIX_SIZE,
+        )
+        video_entries.append((sample_entry, sample_children))
+
+    if video_track_index >= len(video_entries):
+        raise IsoBmffError(
+            f"file has {len(video_entries)} video track(s); cannot select index {video_track_index}"
+        )
+
+    sample_entry, sample_children = video_entries[video_track_index]
+    dv_boxes = tuple(box for box in sample_children if box.type in _DOLBY_VISION_CONFIG_BOXES)
+    if len(dv_boxes) > 1:
+        raise IsoBmffError("visual sample entry contains multiple Dolby Vision configuration boxes")
+
+    config: DolbyVisionConfigEvidence | None = None
+    if dv_boxes:
+        box = dv_boxes[0]
+        payload = bytes(source[box.payload_start : box.end])
+        # ISO/IEC 14496-15 DolbyVisionConfigurationBox record:
+        # byte 2 contains the seven-bit profile followed by the top level bit;
+        # byte 4's high nibble contains dv_bl_signal_compatibility_id.
+        profile = payload[2] >> 1 if len(payload) >= 3 else None
+        compatibility_id = payload[4] >> 4 if len(payload) >= 5 else None
+        config = DolbyVisionConfigEvidence(
+            box_type=box.type.decode("ascii"),
+            offset=box.start,
+            payload=payload,
+            profile=profile,
+            bl_signal_compatibility_id=compatibility_id,
+        )
+
+    moov_offset = next(
+        (box.offset for box in top_level_evidence if box.box_type == "moov"),
+        None,
+    )
+    mdat_offset = next(
+        (box.offset for box in top_level_evidence if box.box_type == "mdat"),
+        None,
+    )
+    return IsoBmffEvidence(
+        top_level_boxes=top_level_evidence,
+        moov_offset=moov_offset,
+        mdat_offset=mdat_offset,
+        first_video_sample_entry_type=sample_entry.type.decode("ascii", errors="replace"),
+        dolby_vision_config=config,
+        amve_present=any(box.type == b"amve" for box in sample_children),
+    )
+
+
 def _chunk_offset_boxes(
     data: memoryview,
     tracks: tuple[_Box, ...],
@@ -389,4 +568,12 @@ def insert_amve(
     return bytes(output)
 
 
-__all__ = ["IsoBmffError", "encode_amve_payload", "insert_amve"]
+__all__ = [
+    "DolbyVisionConfigEvidence",
+    "IsoBmffError",
+    "IsoBmffEvidence",
+    "TopLevelBoxEvidence",
+    "encode_amve_payload",
+    "insert_amve",
+    "read_iso_bmff_evidence",
+]

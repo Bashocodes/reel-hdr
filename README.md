@@ -35,10 +35,18 @@ uv sync --dev
 uv run reelhdr doctor
 uv run reelhdr convert input.mov -o output.mp4 --dry-run
 uv run reelhdr convert input.mov -o output.mp4
+uv run reelhdr verify output.mp4
+uv run reelhdr verify output.mp4 --json
 make verify
 ```
 
 The verification gate runs Ruff linting, Ruff formatting checks, and pytest.
+
+`convert` automatically verifies its completed output. Standalone `verify`
+combines ffprobe, MP4Box, and bounded direct ISO-BMFF parsing; it exits zero
+when there are no fail-level findings, while advisory warnings are allowed.
+Use `--expect-audio` or `--expect-audio aac` when audio is part of the delivery
+contract.
 
 The converter operates in a temporary workspace and atomically publishes the
 completed output. FFmpeg, ffprobe, dovi_tool, and MP4Box are discovered on

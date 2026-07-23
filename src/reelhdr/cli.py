@@ -19,6 +19,12 @@ from reelhdr.pipeline import (
 )
 from reelhdr.probe import ProbeError, probe_video
 from reelhdr.tools import ToolUnavailableError, detect_all_tools, format_tool_report
+from reelhdr.verify import (
+    VerifyExpectations,
+    format_human_report,
+    format_json_report,
+    verify_file,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -82,7 +88,20 @@ def build_parser() -> argparse.ArgumentParser:
         "verify",
         help="Verify an encoded video against the delivery contract.",
     )
-    verify.set_defaults(handler=_run_stub)
+    verify.add_argument("file", type=Path, help="MP4 deliverable to inspect read-only.")
+    verify.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit only the machine-readable verification report.",
+    )
+    verify.add_argument(
+        "--expect-audio",
+        nargs="?",
+        const="*",
+        metavar="CODEC",
+        help="Require an audio track, optionally requiring a codec such as aac.",
+    )
+    verify.set_defaults(handler=_run_verify)
 
     return parser
 
@@ -113,12 +132,29 @@ def _run_convert(args: argparse.Namespace) -> int:
         return 2
 
     print(f"wrote {output}")
-    return 0
+    report = verify_file(
+        output,
+        expectations=VerifyExpectations(
+            expect_audio=source.has_audio,
+            audio_codec=source.audio_codec_name if source.has_audio else None,
+        ),
+    )
+    print(format_human_report(report))
+    return 0 if report.fail_count == 0 else 1
 
 
-def _run_stub(_args: argparse.Namespace) -> int:
-    print("coming in the next phase")
-    return 0
+def _run_verify(args: argparse.Namespace) -> int:
+    expect_audio = args.expect_audio is not None
+    audio_codec = None if args.expect_audio in {None, "*"} else args.expect_audio
+    report = verify_file(
+        args.file,
+        expectations=VerifyExpectations(
+            expect_audio=expect_audio,
+            audio_codec=audio_codec,
+        ),
+    )
+    print(format_json_report(report) if args.json else format_human_report(report))
+    return 0 if report.fail_count == 0 else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
