@@ -39,7 +39,18 @@ class SourceClass(StrEnum):
 
 
 class ProbeError(RuntimeError):
-    """Raised when ffprobe fails or returns an unusable response."""
+    """Raised with bounded evidence when ffprobe cannot produce a usable probe."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: tuple[str, ...] = (),
+        output_lines: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.command = command
+        self.output_lines = output_lines[-15:]
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,22 +140,46 @@ def probe_video(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as error:
-        raise ProbeError(f"ffprobe timed out after {timeout:g}s") from error
+        raise ProbeError(
+            f"ffprobe timed out after {timeout:g}s",
+            command=tuple(argv),
+        ) from error
     except OSError as error:
-        raise ProbeError(f"ffprobe could not start: {_one_line(str(error))}") from error
+        raise ProbeError(
+            f"ffprobe could not start: {_one_line(str(error))}",
+            command=tuple(argv),
+        ) from error
 
     if completed.returncode != 0:
         detail = _one_line(completed.stderr or completed.stdout or "no diagnostic output")
-        raise ProbeError(f"ffprobe exited {completed.returncode}: {detail}")
+        output_lines = tuple((completed.stderr or completed.stdout).splitlines()[-15:])
+        raise ProbeError(
+            f"ffprobe exited {completed.returncode}: {detail}",
+            command=tuple(argv),
+            output_lines=output_lines,
+        )
 
     try:
         payload = json.loads(completed.stdout)
     except (json.JSONDecodeError, TypeError) as error:
-        raise ProbeError("ffprobe returned invalid JSON") from error
+        raise ProbeError(
+            "ffprobe returned invalid JSON",
+            command=tuple(argv),
+        ) from error
 
     if not isinstance(payload, Mapping):
-        raise ProbeError("ffprobe JSON root must be an object")
-    return parse_probe_json(payload, path=source_path)
+        raise ProbeError(
+            "ffprobe JSON root must be an object",
+            command=tuple(argv),
+        )
+    try:
+        return parse_probe_json(payload, path=source_path)
+    except ProbeError as error:
+        raise ProbeError(
+            str(error),
+            command=tuple(argv),
+            output_lines=error.output_lines,
+        ) from error
 
 
 def parse_probe_json(payload: Mapping[str, Any], *, path: str | Path) -> VideoProbe:

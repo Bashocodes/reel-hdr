@@ -1,53 +1,175 @@
 # Reel-HDR
 
-Reel-HDR is an open-source Python CLI for local HDR video conversion and
-conformance verification.
+**HDR reels that survive Instagram — SDR/HLG/PQ in, Dolby Vision 8.4 out, verified.**
 
-The conversion engine accepts SDR, HLG, and PQ inputs and produces a local
-HEVC Main 10, BT.2020/HLG base layer with Dolby Vision Profile 8.4 metadata.
-It adds the ISO-BMFF ambient-viewing (`amve`) box to the video sample entry.
-This project does not claim Dolby certification.
+Reel-HDR is a local, open-source Python CLI that turns ordinary and HDR source
+videos into a reproducible social-delivery file. It produces Dolby Vision
+profile 8.4 compatible signalling over a standards-based HLG base layer, then
+checks the result instead of trusting a successful encoder exit code.
 
-Conversion is intentionally neutral:
+## Why this exists
 
-- PQ uses the BT.2100 PQ EOTF, a configurable relative-scene normalization,
-  and the BT.2100 HLG OETF. `--fast` is an explicitly labeled FFmpeg
-  approximation; the default processes every decoded sample with NumPy.
-- SDR receives a 10-bit HLG/BT.2020 signaling transcode without a tone curve.
-- HLG receives no transfer transform. Existing 10-bit HEVC samples are copied;
-  other codecs are transcoded without changing the signal transfer.
+An HDR timeline can look correct on a phone and still arrive washed out after
+upload: PQ values may be relabelled as HLG without mathematical conversion,
+color tags may be dropped, or Dolby Vision/container metadata may be incomplete.
+The working export path is commonly locked inside Final Cut Pro or DaVinci
+Resolve project settings. Reel-HDR makes that path inspectable, scriptable, and
+repeatable from a terminal.
 
-Creative grading, look curves, and platform-success guarantees are out of
-scope.
+It does not grade footage. It normalizes transfer, encoding, signalling, and
+container metadata, then reports what is actually in the output.
 
-## Requirements
+## Five-minute quickstart
 
-- Python 3.12 or newer
-- [uv](https://docs.astral.sh/uv/)
-- External video tools as reported by `reelhdr doctor`
+Requirements: macOS, Python 3.12+, [uv](https://docs.astral.sh/uv/), and
+Homebrew. `dovi_tool` can alternatively be installed through Cargo.
 
-Reel-HDR does not bundle FFmpeg, GPAC, or Dolby Vision tooling.
+```bash
+brew install ffmpeg mp4box dovi_tool
+uv tool install .
+reelhdr doctor
+reelhdr convert input.mov -o reel-hdr.mp4
+```
 
-## Development
+If Homebrew does not provide `dovi_tool` in your setup:
+
+```bash
+cargo install dovi_tool
+```
+
+The default command is equivalent to:
+
+```bash
+reelhdr convert input.mov -o reel-hdr.mp4 --preset instagram-dv84
+```
+
+Preview every command without encoding:
+
+```bash
+reelhdr convert input.mov -o reel-hdr.mp4 --dry-run
+```
+
+## How it works
+
+Reel-HDR probes the first video stream, classifies its transfer, and takes one
+neutral path:
+
+```text
+                              ┌─ SDR ─→ 10-bit HLG-tagged transcode ─┐
+INPUT ─→ ffprobe ─→ classify ─┼─ HLG ─→ pass/normalize HLG values ──┼─→ HEVC Main 10
+                              └─ PQ  ─→ PQ EOTF → scene → HLG OETF ─┘
+                                      │
+                                      ├─ instagram-dv84
+                                      │   RPU → inject → MP4Box → amve
+                                      │
+                                      └─ hlg
+                                          MP4Box only; no DV or amve
+                                      │
+                                      └─→ read-only conformance verify
+```
+
+- **PQ:** the default path applies the ITU-R BT.2100 PQ EOTF, normalizes
+  absolute luminance to relative scene light, and applies the HLG OETF for
+  every decoded sample. `--fast` selects a clearly labelled FFmpeg
+  approximation.
+- **HLG:** pixel values pass through. Existing 10-bit HEVC can be stream-copied;
+  other inputs are normalized to Main 10 HEVC and correct container tags.
+- **SDR:** signal values receive a neutral 10-bit, HLG-tagged transcode. No
+  creative tone curve is introduced.
+
+See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) for formulas and container
+details.
+
+## Verification
+
+`convert` verifies every completed output automatically. You can also inspect a
+file without modifying it:
+
+```bash
+reelhdr verify reel-hdr.mp4
+reelhdr verify reel-hdr.mp4 --json
+reelhdr verify clean-hlg.mp4 --preset hlg
+```
+
+The report combines ffprobe, `MP4Box -info`, and bounded direct ISO-BMFF
+parsing. It checks HEVC Main 10, HLG/BT.2020 color tags, frame and duration
+consistency, Dolby Vision profile/compatibility evidence when expected,
+`amve`, audio expectations, and fast-start layout. Warnings are advisory; any
+fail-level finding gives exit code 1.
+
+## Presets
+
+Print the installed table with `reelhdr presets`.
+
+| Preset | Default | Output |
+| --- | --- | --- |
+| `instagram-dv84` | Yes | HEVC Main 10 HLG, Dolby Vision 8.4 compatible signalling, `amve`, verification |
+| `hlg` | No | Clean HEVC Main 10 HLG MP4, without Dolby Vision RPU/config or `amve` |
+
+Common overrides:
+
+```bash
+# Different static L1 ceiling and encoder quality
+reelhdr convert input.mov -o output.mp4 --max-pq 2200 --crf 16
+
+# Target bitrate instead of CRF
+reelhdr convert input.mov -o output.mp4 --bitrate 15M
+
+# Preserve source timestamps (default) or request constant 24 fps
+reelhdr convert input.mov -o output.mp4 --fps passthrough
+reelhdr convert input.mov -o output.mp4 --fps 24
+```
+
+`--crf` and `--bitrate` are mutually exclusive. Explicit flags always override
+preset defaults.
+
+## Progress and failures
+
+A live conversion reports timed stages:
+
+```text
+[ok] probe     0.08s — pq
+[ok] plan      0.03s — instagram-dv84
+[ok] encode   12.41s
+[ok] rpu       0.18s
+[ok] mux       0.09s
+[ok] amve      0.01s
+[ok] verify    0.15s — pass
+```
+
+On failure, Reel-HDR prints the failing stage, exact argv, the last 15 tool
+output lines, and one likely fix. Its temporary workspace is removed on both
+success and failure; publication is atomic.
+
+## Limitations
+
+- No creative grading, shot matching, gamut mapping, or look curves.
+- Produces Dolby Vision profile 8.4 compatible signalling; output acceptance
+  still depends on the receiving device and platform.
+- MP4 video inputs only; image sequences and editing timelines are out of scope.
+- Static L1 metadata is not content analysis.
+- Requires user-installed FFmpeg with `libx265`, ffprobe, MP4Box, and
+  `dovi_tool`.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| `tool was not found` | External binary is missing from `PATH` | Run `reelhdr doctor` and paste its install block |
+| PQ output looks wrong on iPhone | Source was retagged instead of converted | Use the default conversion path; do not replace it with tag-only FFmpeg arguments |
+| `output already exists` | Safe overwrite protection | Choose another `-o` path or pass `--force` |
+| RPU step fails | Missing/outdated `dovi_tool` | Update it with Homebrew or `cargo install dovi_tool` |
+| Mux step fails | MP4Box missing or source audio unreadable | Run `reelhdr doctor`; test the input with ffprobe |
+| Frame-count verification fails | Variable/malformed timestamps or forced FPS | Retry with `--fps passthrough` and inspect the source |
+| Fast-start warning | `mdat` precedes `moov` | File remains usable, but remux before delivery if the platform requires progressive layout |
+
+## Development and licensing
 
 ```bash
 uv sync --dev
-uv run reelhdr doctor
-uv run reelhdr convert input.mov -o output.mp4 --dry-run
-uv run reelhdr convert input.mov -o output.mp4
-uv run reelhdr verify output.mp4
-uv run reelhdr verify output.mp4 --json
 make verify
 ```
 
-The verification gate runs Ruff linting, Ruff formatting checks, and pytest.
-
-`convert` automatically verifies its completed output. Standalone `verify`
-combines ffprobe, MP4Box, and bounded direct ISO-BMFF parsing; it exits zero
-when there are no fail-level findings, while advisory warnings are allowed.
-Use `--expect-audio` or `--expect-audio aac` when audio is part of the delivery
-contract.
-
-The converter operates in a temporary workspace and atomically publishes the
-completed output. FFmpeg, ffprobe, dovi_tool, and MP4Box are discovered on
-`PATH`; no external binary is bundled.
+Reel-HDR is MIT-licensed. Its external media tools are not bundled; their
+licenses and the process boundary are documented in
+[docs/LICENSING_TOOLS.md](docs/LICENSING_TOOLS.md).

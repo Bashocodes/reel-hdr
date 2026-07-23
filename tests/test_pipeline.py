@@ -30,6 +30,21 @@ TOOLS = Toolchain(
 )
 
 
+def test_hlg_toolchain_does_not_require_dovi_tool(monkeypatch) -> None:
+    requested = []
+
+    def fake_require(key):
+        requested.append(key)
+        return f"/tools/{key}"
+
+    monkeypatch.setattr(pipeline, "require_tool", fake_require)
+
+    tools = pipeline.resolve_toolchain("hlg")
+
+    assert requested == ["ffmpeg", "mp4box"]
+    assert tools.dovi_tool is None
+
+
 def _probe(
     source_class: SourceClass,
     *,
@@ -143,12 +158,54 @@ def test_dry_run_formats_every_external_argv_without_executing() -> None:
     output = format_plan(plan)
 
     assert "Reel-HDR conversion plan (dry run)" in output
+    assert "preset: instagram-dv84" in output
     assert "source: pq" in output
     assert "decoder: /tools/ffmpeg" in output
     assert "dovi_tool: /tools/dovi_tool generate" in output
     assert "MP4Box: /tools/MP4Box -new -add" in output
     assert "$WORK/dv84.hevc" in output
     assert "internal: insert-amve" in output
+
+
+def test_hlg_preset_has_no_rpu_or_amve_steps() -> None:
+    plan = build_conversion_plan(
+        _probe(SourceClass.SDR),
+        "out.mp4",
+        toolchain=Toolchain(
+            ffmpeg="/tools/ffmpeg",
+            dovi_tool=None,
+            mp4box="/tools/MP4Box",
+        ),
+        preset="hlg",
+    )
+
+    assert [step.key for step in plan.steps] == [
+        "encode-sdr-base",
+        "mux",
+        "publish",
+    ]
+    mux_spec = plan.steps[1].commands[0].argv[3]
+    assert "dvp=" not in mux_spec
+    assert "colr=nclx,9,18,9,no" in mux_spec
+
+
+def test_numeric_fps_and_bitrate_override_passthrough_and_crf() -> None:
+    plan = build_conversion_plan(
+        _probe(SourceClass.SDR),
+        "out.mp4",
+        toolchain=TOOLS,
+        fps="24",
+        crf=None,
+        bitrate="12M",
+    )
+
+    encode = plan.steps[0].commands[0].argv
+    assert plan.output_fps == Fraction(24, 1)
+    assert plan.frame_count == 240
+    assert encode[encode.index("-fps_mode") + 1] == "cfr"
+    assert "fps=24/1" in encode[encode.index("-vf") + 1]
+    assert encode[encode.index("-b:v") + 1] == "12M"
+    assert "-crf" not in encode
 
 
 def test_rpu_config_applies_the_configurable_static_l1_ceiling() -> None:
@@ -231,6 +288,36 @@ def test_temp_workspace_is_removed_when_a_step_fails(
     assert not plan.output_path.exists()
 
 
+def test_progress_reports_canonical_stages_and_hlg_skips(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_path = tmp_path / "input.bin"
+    source_path.write_bytes(b"input")
+    plan = build_conversion_plan(
+        _probe(SourceClass.SDR, path=source_path),
+        tmp_path / "out.mp4",
+        toolchain=Toolchain(
+            ffmpeg="/tools/ffmpeg",
+            dovi_tool=None,
+            mp4box="/tools/MP4Box",
+        ),
+        preset="hlg",
+    )
+    monkeypatch.setattr(pipeline, "_execute_step", lambda *_args, **_kwargs: None)
+    events = []
+
+    execute_conversion(plan, progress=events.append)
+
+    assert [(event.stage, event.skipped) for event in events] == [
+        ("encode", False),
+        ("rpu", True),
+        ("mux", False),
+        ("amve", True),
+    ]
+    assert all(event.elapsed_seconds >= 0 for event in events)
+
+
 def test_frame_pipe_applies_the_shared_pq_to_hlg_math() -> None:
     input_samples = np.array([0, round(0.5080784215 * 65535), 65535], dtype="<u2")
     output = io.BytesIO()
@@ -252,8 +339,29 @@ def test_failed_tool_output_is_returned_as_a_bounded_diagnostic(
 
     monkeypatch.setattr(subprocess, "run", fail)
 
-    with pytest.raises(
-        ConversionError,
-        match=r"ffmpeg exited 7\nsynthetic failure detail",
-    ):
+    with pytest.raises(ConversionError, match=r"ffmpeg exited 7") as raised:
         pipeline._run_command(("/tools/ffmpeg", "-version"))
+
+    assert raised.value.step == "command"
+    assert raised.value.commands == (("/tools/ffmpeg", "-version"),)
+    assert raised.value.output_lines == ("synthetic failure detail",)
+    diagnostic = pipeline.format_conversion_failure(raised.value)
+    assert "command:" in diagnostic
+    assert "/tools/ffmpeg -version" in diagnostic
+    assert "synthetic failure detail" in diagnostic
+    assert "likely fix:" in diagnostic
+
+
+def test_failed_tool_diagnostic_keeps_only_the_last_15_lines(monkeypatch) -> None:
+    def fail(argv, **kwargs):
+        kwargs["stdout"].write("\n".join(f"line {index}" for index in range(20)).encode() + b"\n")
+        return subprocess.CompletedProcess(argv, 9)
+
+    monkeypatch.setattr(subprocess, "run", fail)
+
+    with pytest.raises(ConversionError) as raised:
+        pipeline._run_command(("/tools/ffmpeg", "-i", "input.mov"), step="encode-sdr-base")
+
+    assert len(raised.value.output_lines) == 15
+    assert raised.value.output_lines[0] == "line 5"
+    assert raised.value.output_lines[-1] == "line 19"

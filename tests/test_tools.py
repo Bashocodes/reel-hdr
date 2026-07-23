@@ -56,6 +56,8 @@ def test_missing_tools_include_one_line_install_hints(tmp_path: Path) -> None:
     assert "[missing] ffmpeg: not found — install with: brew install ffmpeg" in report
     assert "[missing] MP4Box: not found — install with: brew install mp4box" in report
     assert "cargo install dovi_tool" in report
+    assert "Install missing tools:" in report
+    assert "brew install ffmpeg mp4box dovi_tool" in report
 
     with pytest.raises(ToolUnavailableError) as raised:
         require_tool("mp4box", path=str(tmp_path))

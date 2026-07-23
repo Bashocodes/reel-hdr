@@ -14,7 +14,7 @@ from reelhdr.amve import (
     TopLevelBoxEvidence,
 )
 from reelhdr.mp4box import parse_mp4box_info
-from reelhdr.probe import VideoProbe, parse_probe_json
+from reelhdr.probe import SourceClass, VideoProbe, parse_probe_json
 from reelhdr.verify import (
     CheckStatus,
     VerificationEvidence,
@@ -110,6 +110,53 @@ def test_valid_evidence_passes_every_declared_check() -> None:
         "timing.tool_frame_count",
     }
     assert all(check.status is CheckStatus.OK for check in report.checks)
+
+
+def test_clean_hlg_evidence_passes_the_hlg_preset_contract() -> None:
+    evidence = _valid_evidence()
+    assert evidence.probe is not None
+    assert evidence.container is not None
+    clean_probe = replace(
+        evidence.probe,
+        source_class=SourceClass.HLG,
+        dv_profile=None,
+        dv_level=None,
+        dv_bl_signal_compatibility_id=None,
+        has_dolby_vision_rpu=False,
+    )
+    clean_container = replace(
+        evidence.container,
+        dolby_vision_config=None,
+        amve_present=False,
+    )
+    clean_mp4box = parse_mp4box_info(
+        _VALID_MP4BOX.replace(
+            "DolbyVision version 1.0 profile 8 level 1 (Compatibility: 4)\n",
+            "",
+        ),
+        path="clean-hlg.mp4",
+    )
+
+    report = evaluate_verification(
+        "clean-hlg.mp4",
+        replace(
+            evidence,
+            probe=clean_probe,
+            container=clean_container,
+            mp4box=clean_mp4box,
+        ),
+        expectations=VerifyExpectations(
+            expect_audio=True,
+            audio_codec="aac",
+            expect_dolby_vision=False,
+            expect_amve=False,
+        ),
+    )
+
+    assert report.verdict is VerifyVerdict.PASS
+    assert report.fail_count == 0
+    assert _by_id(report, "dv.config_box").value_found == "missing"
+    assert _by_id(report, "container.amve").value_found == "missing"
 
 
 @pytest.mark.parametrize(

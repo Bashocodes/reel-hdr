@@ -119,6 +119,8 @@ class VerifyExpectations:
 
     expect_audio: bool = False
     audio_codec: str | None = None
+    expect_dolby_vision: bool = True
+    expect_amve: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,7 +214,7 @@ def evaluate_verification(
             )
         )
     else:
-        checks.extend(_container_checks(evidence.container))
+        checks.extend(_container_checks(evidence.container, expected))
 
     if evidence.mp4box is None:
         checks.append(
@@ -224,7 +226,7 @@ def evaluate_verification(
             )
         )
     else:
-        checks.extend(_mp4box_checks(evidence.mp4box, evidence.probe))
+        checks.extend(_mp4box_checks(evidence.mp4box, evidence.probe, expected))
 
     return VerifyReport(path=Path(path), checks=tuple(checks))
 
@@ -433,7 +435,7 @@ def _probe_checks(
         )
     )
     checks.append(_duration_consistency_check(probe))
-    checks.append(_ffprobe_dolby_check(probe))
+    checks.append(_ffprobe_dolby_check(probe, expectations))
 
     if expectations.expect_audio:
         audio_found = (
@@ -519,12 +521,37 @@ def _duration_consistency_check(probe: VideoProbe) -> VerifyCheck:
     )
 
 
-def _ffprobe_dolby_check(probe: VideoProbe) -> VerifyCheck:
+def _ffprobe_dolby_check(
+    probe: VideoProbe,
+    expectations: VerifyExpectations,
+) -> VerifyCheck:
     found = (
         f"profile={_found(probe.dv_profile)}, "
         f"compatibility={_found(probe.dv_bl_signal_compatibility_id)}, "
         f"rpu={'present' if probe.has_dolby_vision_rpu else 'not reported'}"
     )
+    if not expectations.expect_dolby_vision:
+        has_dolby = bool(
+            probe.dv_profile is not None
+            or probe.dv_bl_signal_compatibility_id is not None
+            or probe.has_dolby_vision_rpu
+        )
+        return (
+            _fail(
+                "dv.ffprobe_signal",
+                found,
+                "no Dolby Vision signalling",
+                "the file contains Dolby Vision metadata but the HLG preset requires a clean base",
+            )
+            if has_dolby
+            else _ok(
+                "dv.ffprobe_signal",
+                found,
+                "no Dolby Vision signalling",
+                "ffprobe sees a clean HLG stream without Dolby Vision metadata.",
+            )
+        )
+
     expected = "profile=8, compatibility=4, RPU present"
     if probe.dv_profile not in {None, 8} or probe.dv_bl_signal_compatibility_id not in {
         None,
@@ -558,7 +585,10 @@ def _ffprobe_dolby_check(probe: VideoProbe) -> VerifyCheck:
     )
 
 
-def _container_checks(container: IsoBmffEvidence) -> list[VerifyCheck]:
+def _container_checks(
+    container: IsoBmffEvidence,
+    expectations: VerifyExpectations,
+) -> list[VerifyCheck]:
     checks: list[VerifyCheck] = []
     sample_entry = container.first_video_sample_entry_type
     checks.append(
@@ -578,7 +608,23 @@ def _container_checks(container: IsoBmffEvidence) -> list[VerifyCheck]:
     )
 
     config = container.dolby_vision_config
-    if config is None:
+    if not expectations.expect_dolby_vision:
+        checks.append(
+            _ok(
+                "dv.config_box",
+                "missing",
+                "no dvcC or dvvC configuration box",
+                "The HLG-only sample entry has no Dolby Vision configuration.",
+            )
+            if config is None
+            else _fail(
+                "dv.config_box",
+                config.box_type,
+                "no dvcC or dvvC configuration box",
+                "the HLG-only output was muxed with Dolby Vision configuration metadata",
+            )
+        )
+    elif config is None:
         checks.append(
             _fail(
                 "dv.config_box",
@@ -630,21 +676,38 @@ def _container_checks(container: IsoBmffEvidence) -> list[VerifyCheck]:
             )
         )
 
-    checks.append(
-        _ok(
-            "container.amve",
-            "present",
-            "amve in the video sample entry",
-            "Ambient-viewing metadata is attached to the video sample description.",
+    if expectations.expect_amve:
+        checks.append(
+            _ok(
+                "container.amve",
+                "present",
+                "amve in the video sample entry",
+                "Ambient-viewing metadata is attached to the video sample description.",
+            )
+            if container.amve_present
+            else _fail(
+                "container.amve",
+                "missing",
+                "amve in the video sample entry",
+                "the file bypassed Reel-HDR's final container step or metadata was stripped",
+            )
         )
-        if container.amve_present
-        else _fail(
-            "container.amve",
-            "missing",
-            "amve in the video sample entry",
-            "the file bypassed Reel-HDR's final container step or metadata was stripped",
+    else:
+        checks.append(
+            _fail(
+                "container.amve",
+                "present",
+                "no amve box",
+                "the HLG-only preset should not carry the DV delivery path's ambient-viewing box",
+            )
+            if container.amve_present
+            else _ok(
+                "container.amve",
+                "missing",
+                "no amve box",
+                "The clean HLG sample entry has no ambient-viewing extension.",
+            )
         )
-    )
 
     order = " → ".join(container.top_level_box_order) or "no top-level boxes"
     if container.fast_start is True:
@@ -674,6 +737,7 @@ def _container_checks(container: IsoBmffEvidence) -> list[VerifyCheck]:
 def _mp4box_checks(
     info: MP4BoxInfo,
     probe: VideoProbe | None,
+    expectations: VerifyExpectations,
 ) -> list[VerifyCheck]:
     checks: list[VerifyCheck] = []
     dolby = info.dolby_vision
@@ -682,7 +746,36 @@ def _mp4box_checks(
         f"compatibility={_found(dolby.compatibility_id)}"
     )
     expected = "profile=8, compatibility=4"
-    if dolby.profile not in {None, 8} or dolby.compatibility_id not in {None, 4}:
+    if not expectations.expect_dolby_vision:
+        expected = "no Dolby Vision signalling"
+        if dolby.state is EvidenceState.ABSENT:
+            checks.append(
+                _ok(
+                    "dv.mp4box_signal",
+                    found,
+                    expected,
+                    "MP4Box confirms a clean HLG-only sample entry.",
+                )
+            )
+        elif dolby.state is EvidenceState.PRESENT:
+            checks.append(
+                _fail(
+                    "dv.mp4box_signal",
+                    found,
+                    expected,
+                    "MP4Box sees Dolby Vision metadata in an HLG-only output",
+                )
+            )
+        else:
+            checks.append(
+                _warn(
+                    "dv.mp4box_signal",
+                    found,
+                    expected,
+                    "MP4Box output was ambiguous, so absence could not be independently confirmed",
+                )
+            )
+    elif dolby.profile not in {None, 8} or dolby.compatibility_id not in {None, 4}:
         checks.append(
             _fail(
                 "dv.mp4box_signal",

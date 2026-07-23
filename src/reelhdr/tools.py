@@ -157,7 +157,7 @@ def require_tool(key: str, *, path: str | None = None) -> str:
 
 
 def format_tool_report(statuses: Sequence[ToolStatus]) -> str:
-    """Format a deterministic doctor report."""
+    """Format a deterministic doctor report with copy-pasteable fixes."""
 
     lines = ["External tools:"]
     for status in statuses:
@@ -172,4 +172,21 @@ def format_tool_report(statuses: Sequence[ToolStatus]) -> str:
         if status.version and status.version_error:
             detail = f"{status.version} ({status.version_error})"
         lines.append(f"[ok] {spec.executable}: {status.path} — {detail}")
+    missing_keys = {status.spec.key for status in statuses if not status.available}
+    brew_packages: list[str] = []
+    if missing_keys & {"ffmpeg", "ffprobe"}:
+        brew_packages.append("ffmpeg")
+    if "mp4box" in missing_keys:
+        brew_packages.append("mp4box")
+    if "dovi_tool" in missing_keys:
+        brew_packages.append("dovi_tool")
+    if brew_packages:
+        lines.extend(("", "Install missing tools:", f"brew install {' '.join(brew_packages)}"))
+        if "dovi_tool" in missing_keys:
+            lines.extend(
+                (
+                    "# If dovi_tool is unavailable from your Homebrew setup:",
+                    "cargo install dovi_tool",
+                )
+            )
     return "\n".join(lines)

@@ -218,8 +218,11 @@ def test_probe_reports_concise_process_and_json_errors(
         )
 
     monkeypatch.setattr(subprocess, "run", failed_run)
-    with pytest.raises(ProbeError, match=r"ffprobe exited 1: invalid container"):
+    with pytest.raises(ProbeError, match=r"ffprobe exited 1: invalid container") as raised:
         probe_video("broken.mov", ffprobe_path="/test/ffprobe")
+    assert raised.value.command[0] == "/test/ffprobe"
+    assert raised.value.command[-1] == "broken.mov"
+    assert raised.value.output_lines == ("invalid", "container")
 
     def invalid_json_run(argv, **_kwargs):
         return subprocess.CompletedProcess(argv, 0, stdout="{", stderr="")

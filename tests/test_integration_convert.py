@@ -64,18 +64,7 @@ def _source_encode_args(source_class: SourceClass) -> list[str]:
     ]
 
 
-@pytest.mark.integration
-@pytest.mark.skipif(
-    bool(_MISSING_TOOLS),
-    reason=f"missing integration tools: {', '.join(_MISSING_TOOLS)}",
-)
-@pytest.mark.parametrize("source_class", [SourceClass.SDR, SourceClass.HLG, SourceClass.PQ])
-def test_one_second_synthetic_clip_converts_to_hevc_hlg_dv84(
-    tmp_path: Path,
-    source_class: SourceClass,
-) -> None:
-    input_path = tmp_path / f"synthetic-{source_class.value}-input.mp4"
-    output_path = tmp_path / f"synthetic-{source_class.value}-output.mp4"
+def _write_synthetic_input(path: Path, source_class: SourceClass) -> None:
     subprocess.run(
         [
             "ffmpeg",
@@ -103,10 +92,25 @@ def test_one_second_synthetic_clip_converts_to_hevc_hlg_dv84(
             "-b:a",
             "64k",
             "-shortest",
-            str(input_path),
+            str(path),
         ],
         check=True,
     )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    bool(_MISSING_TOOLS),
+    reason=f"missing integration tools: {', '.join(_MISSING_TOOLS)}",
+)
+@pytest.mark.parametrize("source_class", [SourceClass.SDR, SourceClass.HLG, SourceClass.PQ])
+def test_one_second_synthetic_clip_converts_to_hevc_hlg_dv84(
+    tmp_path: Path,
+    source_class: SourceClass,
+) -> None:
+    input_path = tmp_path / f"synthetic-{source_class.value}-input.mp4"
+    output_path = tmp_path / f"synthetic-{source_class.value}-output.mp4"
+    _write_synthetic_input(input_path, source_class)
 
     source = probe_video(input_path)
     assert source.source_class is source_class
@@ -133,5 +137,44 @@ def test_one_second_synthetic_clip_converts_to_hevc_hlg_dv84(
     report = verify_file(
         output_path,
         expectations=VerifyExpectations(expect_audio=True, audio_codec="aac"),
+    )
+    assert report.fail_count == 0
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    bool(_MISSING_TOOLS),
+    reason=f"missing integration tools: {', '.join(_MISSING_TOOLS)}",
+)
+def test_hlg_preset_converts_and_verifies_without_dolby_or_amve(tmp_path: Path) -> None:
+    input_path = tmp_path / "synthetic-sdr-input.mp4"
+    output_path = tmp_path / "synthetic-hlg-output.mp4"
+    _write_synthetic_input(input_path, SourceClass.SDR)
+
+    source = probe_video(input_path)
+    plan = build_conversion_plan(
+        source,
+        output_path,
+        toolchain=resolve_toolchain("hlg"),
+        preset="hlg",
+    )
+    execute_conversion(plan)
+
+    result = probe_video(output_path)
+    assert result.source_class is SourceClass.HLG
+    assert result.dv_profile is None
+    assert result.has_dolby_vision_rpu is False
+    assert result.codec_name == "hevc"
+    assert result.bit_depth == 10
+    assert result.color_transfer == "arib-std-b67"
+
+    report = verify_file(
+        output_path,
+        expectations=VerifyExpectations(
+            expect_audio=True,
+            audio_codec="aac",
+            expect_dolby_vision=False,
+            expect_amve=False,
+        ),
     )
     assert report.fail_count == 0
