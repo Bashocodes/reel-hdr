@@ -170,6 +170,11 @@ uv sync --dev
 make verify
 ```
 
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) or a
+bounded task under [docs/good-first-issues](docs/good-first-issues/). Release
+history is recorded in [CHANGELOG.md](CHANGELOG.md), and suspected
+vulnerabilities should follow [SECURITY.md](SECURITY.md).
+
 Reel-HDR is MIT-licensed. Its external media tools are not bundled; their
 licenses and the process boundary are documented in
 [docs/LICENSING_TOOLS.md](docs/LICENSING_TOOLS.md).

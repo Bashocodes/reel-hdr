@@ -1,0 +1,67 @@
+name: Bug report
+description: Report reproducible incorrect behavior using non-sensitive evidence.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not upload private media. Prefer a synthetic reproducer and redact personal paths.
+        Report security issues privately according to SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Reel-HDR version
+      placeholder: 0.1.0a0
+    validations:
+      required: true
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor output
+      description: Paste `reelhdr doctor` output after redacting personal paths.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: Paste the command with synthetic filenames and no credentials.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and bounded diagnostic
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checklist
+      options:
+        - label: I used no private or copyrighted media in this report.
+          required: true
+        - label: I removed credentials and personal filesystem paths.
+          required: true
+        - label: This is not a vulnerability report.
+          required: true
