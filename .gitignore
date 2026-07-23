@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.python-version.local
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Editors and operating systems
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+
+# Local outputs and scratch space
+output/
+outputs/
+media/
+scratch/
+tmp/
+
+# Media is denied by default. Use an explicit, reviewed force-add only if a
+# future test fixture has a clear license and cannot be generated in code.
+*.[mM][pP]4
+*.[mM][oO][vV]
+*.[hH][eE][iI][cC]
+*.[pP][nN][gG]
+*.[jJ][pP][gG]
+*.[jJ][pP][eE][gG]
+*.[wW][aA][vV]
+*.[mM][pP]3
+*.[mM]4[aA]
+*.[aA][aA][cC]
+*.[fF][lL][aA][cC]
+*.[mM][kK][vV]
+*.[wW][eE][bB][mM]

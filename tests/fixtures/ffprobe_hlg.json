@@ -1,0 +1,26 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "hevc",
+      "profile": "Main 10",
+      "codec_type": "video",
+      "codec_tag_string": "hvc1",
+      "width": 3840,
+      "height": 2160,
+      "pix_fmt": "yuv420p10le",
+      "bits_per_raw_sample": "10",
+      "r_frame_rate": "25/1",
+      "avg_frame_rate": "25/1",
+      "duration": "2.000000",
+      "nb_frames": "50",
+      "color_range": "tv",
+      "color_space": "bt2020nc",
+      "color_transfer": "arib-std-b67",
+      "color_primaries": "bt2020"
+    }
+  ],
+  "format": {
+    "duration": "2.000000"
+  }
+}

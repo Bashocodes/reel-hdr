@@ -1,0 +1,126 @@
+"""Command-line interface for Reel-HDR."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from collections.abc import Sequence
+from pathlib import Path
+
+from reelhdr.pipeline import (
+    DEFAULT_MAX_PQ,
+    DEFAULT_PQ_NOMINAL_PEAK_NITS,
+    ConversionError,
+    PlanError,
+    build_conversion_plan,
+    execute_conversion,
+    format_plan,
+    resolve_toolchain,
+)
+from reelhdr.probe import ProbeError, probe_video
+from reelhdr.tools import ToolUnavailableError, detect_all_tools, format_tool_report
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="reelhdr",
+        description="Convert and verify local HDR reels.",
+    )
+    subcommands = parser.add_subparsers(dest="command", required=True)
+
+    doctor = subcommands.add_parser(
+        "doctor",
+        help="Report availability and versions of external video tools.",
+    )
+    doctor.set_defaults(handler=_run_doctor)
+
+    convert = subcommands.add_parser(
+        "convert",
+        help="Convert a video to the target delivery format.",
+    )
+    convert.add_argument("input", type=Path, help="SDR, HLG, or PQ input video.")
+    convert.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        required=True,
+        help="Destination MP4 path.",
+    )
+    convert.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the complete ordered plan without converting.",
+    )
+    convert.add_argument(
+        "--fast",
+        action="store_true",
+        help=(
+            "Use FFmpeg's approximate PQ-to-HLG filter path instead of the "
+            "default frame-accurate NumPy path."
+        ),
+    )
+    convert.add_argument(
+        "--max-pq",
+        type=int,
+        default=DEFAULT_MAX_PQ,
+        help="Static Dolby Vision L1 maximum PQ code (0-4095; default: 2500).",
+    )
+    convert.add_argument(
+        "--pq-peak-nits",
+        type=float,
+        default=DEFAULT_PQ_NOMINAL_PEAK_NITS,
+        help=("PQ luminance used as relative HLG scene-light 1.0 (default: 1000)."),
+    )
+    convert.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing output only after conversion completes.",
+    )
+    convert.set_defaults(handler=_run_convert)
+
+    verify = subcommands.add_parser(
+        "verify",
+        help="Verify an encoded video against the delivery contract.",
+    )
+    verify.set_defaults(handler=_run_stub)
+
+    return parser
+
+
+def _run_doctor(_args: argparse.Namespace) -> int:
+    print(format_tool_report(detect_all_tools()))
+    return 0
+
+
+def _run_convert(args: argparse.Namespace) -> int:
+    try:
+        source = probe_video(args.input)
+        plan = build_conversion_plan(
+            source,
+            args.output,
+            toolchain=resolve_toolchain(),
+            fast=args.fast,
+            max_pq=args.max_pq,
+            nominal_peak_nits=args.pq_peak_nits,
+        )
+        if args.dry_run:
+            print(format_plan(plan))
+            return 0
+
+        output = execute_conversion(plan, force=args.force)
+    except (ConversionError, PlanError, ProbeError, ToolUnavailableError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+    print(f"wrote {output}")
+    return 0
+
+
+def _run_stub(_args: argparse.Namespace) -> int:
+    print("coming in the next phase")
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    return int(args.handler(args))
