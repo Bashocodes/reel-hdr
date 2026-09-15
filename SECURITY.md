@@ -13,13 +13,8 @@ branch and latest tagged alpha.
 
 ## Report a vulnerability privately
 
-**Publication blocker:** replace `[PRIVATE SECURITY CONTACT]` with a monitored
-private email address or enable GitHub private vulnerability reporting before
-making this repository public.
-
-Until that contact is configured, repository collaborators should report
-suspected vulnerabilities directly to the owner through an established
-private channel. Do not open a public issue, discussion, or pull request.
+Use GitHub private vulnerability reporting on this repository (Security tab → Report a vulnerability).
+If that is unavailable, write to hello@kalailabs.org. Do not open a public issue, discussion, or pull request.
 
 Please include:
 
