@@ -1,53 +1,47 @@
 # Reel-HDR
 
-**HDR reels that survive Instagram — SDR/HLG/PQ in, Dolby Vision 8.4 out, verified.**
+HDR reels that survive Instagram. A local Python command: SDR, HLG or PQ video goes in, and a Dolby Vision profile 8.4
+file on an HLG base comes out. Every output is checked (HEVC Main 10, BT.2020/HLG tags, Dolby Vision signalling) before
+it reports success. It does not grade your footage; it fixes transfer, encoding and metadata.
 
-Reel-HDR is a local, open-source Python CLI that turns ordinary and HDR source
-videos into a reproducible social-delivery file. It produces Dolby Vision
-profile 8.4 compatible signalling over a standards-based HLG base layer, then
-checks the result instead of trusting a successful encoder exit code.
+```text
+$ reelhdr doctor
+External tools:
+[ok] ffmpeg: /opt/homebrew/bin/ffmpeg — ffmpeg version 8.1.1
+[ok] ffprobe: /opt/homebrew/bin/ffprobe — ffprobe version 8.1.1
+[ok] dovi_tool: /opt/homebrew/bin/dovi_tool — dovi_tool 2.3.2
+[ok] MP4Box: /opt/homebrew/bin/MP4Box — MP4Box - GPAC version 26.02
+```
 
-## Why this exists
+## Run it
 
-An HDR timeline can look correct on a phone and still arrive washed out after
-upload: PQ values may be relabelled as HLG without mathematical conversion,
-color tags may be dropped, or Dolby Vision/container metadata may be incomplete.
-The working export path is commonly locked inside Final Cut Pro or DaVinci
-Resolve project settings. Reel-HDR makes that path inspectable, scriptable, and
-repeatable from a terminal.
-
-It does not grade footage. It normalizes transfer, encoding, signalling, and
-container metadata, then reports what is actually in the output.
-
-## Five-minute quickstart
-
-Requirements: macOS, Python 3.12+, [uv](https://docs.astral.sh/uv/), and
-Homebrew. `dovi_tool` can alternatively be installed through Cargo.
+macOS with Homebrew and uv.
 
 ```bash
 brew install ffmpeg mp4box dovi_tool
+```
+
+```bash
+git clone https://github.com/Bashocodes/reel-hdr.git
+cd reel-hdr
 uv tool install .
+```
+
+```bash
 reelhdr doctor
+```
+
+```bash
 reelhdr convert input.mov -o reel-hdr.mp4
 ```
 
-If Homebrew does not provide `dovi_tool` in your setup:
+Try the plan without writing a file: add `--dry-run`. To check a file you already have:
 
 ```bash
-cargo install dovi_tool
+reelhdr verify reel-hdr.mp4
 ```
 
-The default command is equivalent to:
-
-```bash
-reelhdr convert input.mov -o reel-hdr.mp4 --preset instagram-dv84
-```
-
-Preview every command without encoding:
-
-```bash
-reelhdr convert input.mov -o reel-hdr.mp4 --dry-run
-```
+More: [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) · [CHANGELOG.md](CHANGELOG.md)
 
 ## How it works
 
@@ -178,3 +172,5 @@ vulnerabilities should follow [SECURITY.md](SECURITY.md).
 Reel-HDR is MIT-licensed. Its external media tools are not bundled; their
 licenses and the process boundary are documented in
 [docs/LICENSING_TOOLS.md](docs/LICENSING_TOOLS.md).
+
+Made by cyberyogi (Sharan Ramakrishna). Everything I make: https://inkoji.com/cyberyogi

@@ -14,7 +14,7 @@ branch and latest tagged alpha.
 ## Report a vulnerability privately
 
 Use GitHub private vulnerability reporting on this repository (Security tab → Report a vulnerability).
-If that is unavailable, write to hello@kalailabs.org. Do not open a public issue, discussion, or pull request.
+If that is unavailable, write to hello@kalailab.com. Do not open a public issue, discussion, or pull request.
 
 Please include:
 
