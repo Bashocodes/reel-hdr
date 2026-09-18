@@ -1,5 +1,8 @@
 # Reel-HDR
 
+> Part of the **Director suite**: VETTU · Conductor · Director Open · Reel-HDR.
+> Start at the front door: https://github.com/Bashocodes/director-open
+
 HDR reels that survive Instagram. A local Python command: SDR, HLG or PQ video goes in, and a Dolby Vision profile 8.4
 file on an HLG base comes out. Every output is checked (HEVC Main 10, BT.2020/HLG tags, Dolby Vision signalling) before
 it reports success. It does not grade your footage; it fixes transfer, encoding and metadata.
